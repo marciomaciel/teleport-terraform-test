@@ -1,7 +1,7 @@
 # Set up terraform variables in a separate environment file, or inline here
 
 # This region should support EFS
-TF_VAR_region ?= us-west-2
+TF_VAR_region ?=
 
 # Cluster name is a unique cluster name to use, should be unique and not contain spaces or other special characters
 TF_VAR_cluster_name ?=
@@ -9,16 +9,15 @@ TF_VAR_cluster_name ?=
 # AWS SSH key name to provision in installed instances, should be available in the region
 TF_VAR_key_name ?=
 
-# Full absolute path to the license file for Teleport Enterprise or Pro.
-# This license will be copied into SSM and then pulled down on the auth nodes to enable Enterprise/Pro functionality
+# Full absolute path to the license file for Teleport Enterprise.
+# This license will be copied into SSM and then pulled down on the auth nodes to enable Enterprise functionality
 TF_VAR_license_path ?=
 
 # AMI name contains the version of Teleport to install, and whether to use OSS or Enterprise version
-# These AMIs are published by Gravitational and shared as public whenever a new version of Teleport is released
+# These AMIs are published by Teleport (Gravitational) and shared as public whenever a new version of Teleport is released
 # To list available AMIs:
 # OSS: aws ec2 describe-images --owners 146628656107 --filters 'Name=name,Values=teleport-oss-*'
 # Enterprise: aws ec2 describe-images --owners 146628656107 --filters 'Name=name,Values=teleport-ent-*'
-# FIPS 140-2 images are also available for Enterprise customers, look for '-fips' on the end of the AMI's name
 TF_VAR_ami_name ?=
 
 # Route 53 zone to use, should be the zone registered in AWS, e.g. example.com
@@ -33,34 +32,44 @@ TF_VAR_route53_domain ?=
 TF_VAR_add_wildcard_route53_record ?= true
 
 # Enable adding MongoDB listeners in Teleport proxy, load balancer ports and security groups
-# This will be ignored if TF_VAR_use_tls_routing is set to true
-TF_VAR_enable_mongodb_listener ?= true
+# This will be ignored if TF_VAR_use_tls_routing=true
+TF_VAR_enable_mongodb_listener ?= false
 
 # Enable adding MySQL listeners in Teleport proxy, load balancer ports and security groups
-# This will be ignored if TF_VAR_use_tls_routing is set to true
-TF_VAR_enable_mysql_listener ?= true
+# This will be ignored if TF_VAR_use_tls_routing=true
+TF_VAR_enable_mysql_listener ?= false
 
 # Enable adding Postgres listeners in Teleport proxy, load balancer ports and security groups
-# This will be ignored if TF_VAR_use_tls_routing is set to true
-TF_VAR_enable_postgres_listener ?= true
+# This will be ignored if TF_VAR_use_tls_routing=true
+TF_VAR_enable_postgres_listener ?= false
 
-# Bucket name to store encrypted Let's Encrypt certificates.
+# Bucket name to store Teleport session recordings.
 TF_VAR_s3_bucket_name ?=
+
+# AWS instance type to provision for running this Teleport cluster
+TF_VAR_cluster_instance_type = t3.micro
 
 # Email of your support org, used for Let's Encrypt cert registration process.
 TF_VAR_email ?=
 
-# (optional) Set to true to use ACM (Amazon Certificate Manager) to provision certificates rather than Let's Encrypt
+# Set to true to use Let's Encrypt to provision certificates
+# Note: Let's Encrypt will be automatically disabled if using ACM
+TF_VAR_use_letsencrypt ?= true
+
+# Set to true to use ACM (Amazon Certificate Manager) to provision certificates
 # If you wish to use a pre-existing ACM certificate rather than having Terraform generate one for you, you can import it:
 # terraform import aws_acm_certificate.cert <certificate_arn>
-TF_VAR_use_acm ?= false
-
-# (optional) Set to true to use TLS routing to multiplex all Teleport traffic over one port
-# See https://goteleport.com/docs/architecture/tls-routing for more information
-# Setting this will disable ALL separate listener ports. If you also use ACM, then:
+# Note that TLS routing is automatically enabled when using ACM with the starter-cluster Terraform, meaning:
 # - you must use Teleport and tsh v13+
 # - you must use `tsh proxy` commands for Kubernetes/database access
-TF_VAR_use_tls_routing ?= false
+TF_VAR_use_acm ?= false
+
+# Set to true to use TLS routing to multiplex all Teleport traffic over one port
+# See https://goteleport.com/docs/architecture/tls-routing for more information
+# Setting this will disable ALL separate listener ports.
+# This setting is automatically set to "true" when using ACM with the starter-cluster Terraform
+# and will be ignored.
+TF_VAR_use_tls_routing ?= true
 
 # (optional) Change the default authentication type used for the Teleport cluster.
 # See https://goteleport.com/docs/reference/authentication for more information.
@@ -84,6 +93,12 @@ plan:
 apply:
 	terraform init
 	terraform apply
+
+# Destroy deletes the provisioned resources
+.PHONY: destroy
+destroy:
+	terraform init
+	terraform destroy
 
 # Destroy destroys the infrastructure, it doesn't ask for confirmation so be sure you actually want to
 .PHONY: destroy-yes-i-want-to-do-this

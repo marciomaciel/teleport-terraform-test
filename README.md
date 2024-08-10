@@ -1,78 +1,111 @@
-## Terraform based provisioning example (Amazon single AMI)
+# Teleport Terraform AWS AMI Simple Example
 
-Terraform specifies example provisioning script for Teleport auth, proxy and nodes in High Availability (HA) mode.
+This is a simple Terraform example to get you started provisioning an all-in-one Teleport cluster (auth, node, proxy) on a single ec2 instance based on Teleport's pre-built AMI.
 
-Use these examples as possible deployment patterns suggested by Teleport developers.
+Do not use this in production! This example should be used for demo, proof-of-concept, or learning purposes only.
 
-The scripts set up Let's Encrypt certificates using DNS-01 challenge. This means that users have to control the DNS
-zone via Route 53. ACM can optionally be used too, but Route 53 integration is still required.
+## How does this work?
 
-Teleport join tokens are distributed using SSM parameter store, and certificates are distributed using encrypted S3
-bucket.
+Teleport AMIs are built so you only need to specify environment variables to bring a fully configured instance online. See `data.tpl` or our [documentation](https://goteleport.com/docs/deploy-a-cluster/deployments/aws-terraform/#set-up-variables) to learn more about supported environment variables.
 
-There are a couple of tricks using DynamoDB locking to make sure there is only one auth server node rotating join token
-at a time, but those could be easily replaced and are not critical for performance.
+A series of systemd [units](https://github.com/gravitational/teleport/tree/master/assets/aws/files/system) bootstrap the instance, via several bash [scripts](https://github.com/gravitational/teleport/tree/master/assets/aws/files/bin).
 
-Important bits are that auth servers and proxies are not running as root and are secured exposing absolute minimum of
-the ports to the other parts.
+While this may not be sufficient for all use cases, it's a great proof-of-concept that you can fork and customize to your liking. Check out our AWS AMI [generation code](https://github.com/gravitational/teleport/tree/master/assets/aws) if you're interested in adapting this to your requirements.
 
-## Prerequisites
+This Terraform example will configure the following AWS resources:
 
-We recommend familiarizing yourself with the following resources prior to reviewing our Terraform examples:
+- Teleport all-in-one (auth, node, proxy) single cluster ec2 instance
+- DynamoDB tables (cluster state, cluster events, ssl lock)
+- S3 bucket (session recording storage)
+- Route53 `A` record
+- Security Groups and IAM roles
 
-- [Teleport Architecture](https://goteleport.com/docs/architecture/overview/)
-- [Admin Guide](https://goteleport.com/docs/management/admin/)
-- [Running Teleport Enterprise in High Availability mode on AWS](https://goteleport.com/docs/deploy-a-cluster/deployments/aws-ha-autoscale-cluster-terraform/)
+It can optionally also configure the following AWS resources:
 
-In order to spin up AWS resources using these Terraform examples, you need the following software:
+- Application Load Balancer
+- ACM certificate and validation via Route53
+
+## Instructions
+
+### Accompanying documentation
+
+- [Teleport Single-Instance Deployment on AWS](https://goteleport.com/docs/deploy-a-cluster/deployments/aws-starter-cluster-terraform/)
+
+### Build Requirements
 
 - terraform v1.0+ [install docs](https://learn.hashicorp.com/tutorials/terraform/install-cli)
 - awscli v1.14+ [install docs](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 
+### Usage
+
+- `make plan` and verify the plan is building what you expect.
+- `make apply` to begin provisioning.
+- `make destroy` to delete the provisioned resources.
+
+### Project layout
+
+File           | Description
+-------------- | ---------------------------------------------------------------------------------------------
+acm.tf         | ACM certificate setup and DNS record.
+cluster.tf     | EC2 instance template and provisioning.
+cluster_iam.tf | IAM role provisioning. Permits ec2 instance to talk to AWS resources (ssm, s3, dynamodb, etc)
+cluster_lb.tf  | Application load balancer setup (when using ACM).
+cluster_sg.tf  | Security Group provisioning. Ingress network rules.
+data.tf        | Misc variables used for provisioning AWS resources.
+data.tpl       | Template for Teleport configuration.
+dynamo.tf      | DynamoDB table provisioning. Tables used for Teleport state and events.
+outputs.tf     | Terraform outputs, used to get cluster information.
+route53.tpl    | Route53 zone creation. Requires a hosted zone to configure SSL.
+s3.tf          | S3 bucket provisioning. Bucket used for session recording storage.
+ssm.tf         | Teleport license distribution (if using Teleport enterprise).
+vars.tf        | Inbound variables for Teleport configuration.
+
+### Steps
+
+Update the included Makefile to define your configuration.
+
+1. Run `make apply`.
+2. SSH to your new instance. `ssh ec2-user@<cluster_domain>`.
+3. Create a user (this will create a Teleport User and permit login as the local ec2-user).
+   - OSS:
+   `sudo tctl users add <username> --roles=access,editor --logins=ec2-user`
+   - Enterprise:
+    `tctl users add --roles=access,editor <username> --logins=ec2-user`
+4. Click the registration link provided by the output. Set a password and configure your 2fa token.
+5. Success! You've configured a fully functional Teleport cluster.
+
 ```bash
-# Set variables for Terraform
+# Set up Terraform variables in a separate environment file, or inline here
 
 # Region to run in - we currently have AMIs in the following regions:
 # ap-northeast-1, ap-northeast-2, ap-northeast-3, ap-south-1, ap-southeast-1, ap-southeast-2, ca-central-1, eu-central-1
 # eu-north-1, eu-west-1, eu-west-2, eu-west-3, sa-east-1, us-east-1, us-east-2, us-west-1, us-west-2
-export TF_VAR_region="us-west-2"
+TF_VAR_region ?= "us-west-2"
 
 # Cluster name is a unique cluster name to use, should be unique and not contain spaces or other special characters
-export TF_VAR_cluster_name="teleport.example.com"
+TF_VAR_cluster_name ?= "TeleportCluster1"
+
+# AWS SSH key pair name to provision in installed instances, must be a key pair available in the above defined region (AWS Console > EC2 > Key Pairs)
+TF_VAR_key_name ?= "example"
+
+# Full absolute path to the license file, on the machine executing Terraform, for Teleport Enterprise.
+# This license will be copied into AWS SSM and then pulled down on the auth nodes to enable Enterprise functionality
+TF_VAR_license_path ?= "/path/to/license"
 
 # AMI name contains the version of Teleport to install, and whether to use OSS or Enterprise version
-# These AMIs are published by Teleport (Gravitational) and shared as public whenever a new version of Teleport is released
+# These AMIs are published by Teleport and shared as public whenever a new version of Teleport is released
 # To list available AMIs:
 # OSS: aws ec2 describe-images --owners 146628656107 --filters 'Name=name,Values=teleport-oss-*'
 # Enterprise: aws ec2 describe-images --owners 146628656107 --filters 'Name=name,Values=teleport-ent-*'
 # FIPS 140-2 images are also available for Enterprise customers, look for '-fips' on the end of the AMI's name
-export TF_VAR_ami_name="teleport-ent-16.1.4-arm64"
+TF_VAR_ami_name ?= "teleport-ent-16.1.4-arm64"
 
-# AWS SSH key name to provision in installed instances, should be available in the region
-export TF_VAR_key_name="example"
-
-# (optional) Set to true to use ACM (Amazon Certificate Manager) to provision certificates rather than Let's Encrypt
-# If you wish to use a pre-existing ACM certificate rather than having Terraform generate one for you, you can import it:
-# Terraform import aws_acm_certificate.cert <certificate_arn>
-export TF_VAR_use_acm="false"
-
-# (optional) Set to true to use TLS routing to multiplex all Teleport traffic over one port
-# See https://goteleport.com/docs/architecture/tls-routing for more information
-# Setting this will disable ALL separate listener ports. If you also use ACM, then:
-# - you must use Teleport and tsh v13+
-# - you must use `tsh proxy` commands for Kubernetes/database access
-export TF_VAR_use_tls_routing="false"
-
-# Full absolute path to the license file for Teleport Enterprise.
-# This license will be copied into SSM and then pulled down on the auth nodes to enable Enterprise functionality
-export TF_VAR_license_path="/path/to/license"
-
-# Route 53 zone to use, should be the zone registered in AWS, e.g. example.com
-export TF_VAR_route53_zone="example.com"
+# Route 53 hosted zone to use, must be a root zone registered in AWS, e.g. example.com
+TF_VAR_route53_zone ?= "example.com"
 
 # Subdomain to set up in the zone above, e.g. cluster.example.com
-# This will be used for internet access for users connecting to teleport proxy
-export TF_VAR_route53_domain="cluster.example.com"
+# This will be used for users connecting to Teleport proxy
+TF_VAR_route53_domain ?= "cluster.example.com"
 
 # Set to true to add a wildcard subdomain entry to point to the proxy, e.g. *.cluster.example.com
 # This is used to enable Teleport Application Access
@@ -80,29 +113,42 @@ export TF_VAR_add_wildcard_route53_record="true"
 
 # Enable adding MongoDB listeners in Teleport proxy, load balancer ports, and security groups
 # This will be ignored if TF_VAR_use_tls_routing=true
-export TF_VAR_enable_mongodb_listener="true"
+export TF_VAR_enable_mongodb_listener="false"
 
 # Enable adding MySQL listeners in Teleport proxy, load balancer ports, and security groups
 # This will be ignored if TF_VAR_use_tls_routing=true
-export TF_VAR_enable_mysql_listener="true"
+export TF_VAR_enable_mysql_listener="false"
 
 # Enable adding Postgres listeners in Teleport proxy, load balancer ports, and security groups
 # This will be ignored if TF_VAR_use_tls_routing=true
-export TF_VAR_enable_postgres_listener="true"
+export TF_VAR_enable_postgres_listener="false"
 
-# (optional) If using ACM, set an additional DNS alias which will be added pointing to the NLB. This can
-# be used with clients like kubectl which should target a DNS record. This will also add the DNS name to the
-# Teleport Kubernetes config to prevent certificate SNI issues. You can use this DNS name with commands like:
-# `tctl auth sign --user=foo --format=kubernetes --out=kubeconfig --proxy=https://cluster-nlb.example.com:3026`
-# This setting only takes effect when using ACM, it will be ignored otherwise.
-# This setting only takes effect when TLS routing is _not_ enabled, it will be ignored otherwise.
-#export TF_VAR_route53_domain_acm_nlb_alias="cluster-nlb.example.com"
-
-# Bucket name to store encrypted Let's Encrypt certificates.
+# Bucket name to store Teleport session recordings.
 export TF_VAR_s3_bucket_name="teleport.example.com"
 
-# Email of your support org, used for Let's Encrypt cert registration process.
+# AWS instance type to provision for running this Teleport cluster
+export TF_VAR_cluster_instance_type="t4g.micro"
+
+# Email to be used for Let's Encrypt certificate registration process.
 export TF_VAR_email="support@example.com"
+
+# Set to true to use Let's Encrypt to provision certificates
+export TF_VAR_use_letsencrypt="true"
+
+# Set to true to use ACM (Amazon Certificate Manager) to provision certificates
+# If you wish to use a pre-existing ACM certificate rather than having Terraform generate one for you, you can import it:
+# terraform import aws_acm_certificate.cert <certificate_arn>
+# Note that TLS routing is automatically enabled when using ACM with the starter-cluster Terraform, meaning:
+# - you must use Teleport and tsh v13+
+# - you must use `tsh proxy` commands for Kubernetes/database access
+export TF_VAR_use_acm="false"
+
+# Set to true to use TLS routing to multiplex all Teleport traffic over one port
+# See https://goteleport.com/docs/architecture/tls-routing for more information
+# Setting this will disable ALL separate listener ports.
+# This setting is automatically set to "true" when using ACM with the starter-cluster Terraform
+# and will be ignored.
+export TF_VAR_use_tls_routing="true"
 
 # This value can be used to change the default authentication type used for the Teleport cluster.
 # See https://goteleport.com/docs/reference/authentication for more information.
@@ -116,8 +162,6 @@ export TF_VAR_teleport_auth_type="local"
 # plan
 make plan
 ```
-
-You can see the full list of variables supported in [`vars.tf`](vars.tf).
 
 ## Public Teleport AMI IDs
 

@@ -1,6 +1,28 @@
-// Base AMI is found by name, users can (and should) supply own AMIs
-// the only requirement is systemd installed as all scripts
-// are relying on systemd
+terraform {
+  required_version = ">= 1.0, < 2.0.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.region
+}
+
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnets" "all" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
 data "aws_ami" "base" {
   most_recent = true
   owners      = [146628656107]
@@ -11,22 +33,15 @@ data "aws_ami" "base" {
   }
 }
 
-// This is to figure account_id used in some IAM rules
+data "aws_route53_zone" "cluster" {
+  name = var.route53_zone
+}
+
 data "aws_caller_identity" "current" {
 }
 
-// Use current region of the credentials in some parts of the script,
-// could be as well hardcoded.
 data "aws_region" "current" {
   name = var.region
-}
-
-data "aws_availability_zones" "available" {
-}
-
-// Pick first two availability zones in the region
-locals {
-  azs = [data.aws_availability_zones.available.names[0], data.aws_availability_zones.available.names[1]]
 }
 
 // SSM is picking alias for key to use for encryption in SSM
